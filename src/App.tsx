@@ -40,6 +40,13 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -399,8 +406,13 @@ export default function App() {
                     </div>
                   </div>
                   <div className="chart-container">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={unitChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <ResponsiveContainer width="100%" height="100%" minHeight={400}>
+                      <BarChart 
+                        // @ts-ignore
+                        key={`unit-chart-${unitChartData.map(d => d.unit).join(',')}`}
+                        data={unitChartData} 
+                        margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                      >
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                         <XAxis 
                           dataKey="unit" 
@@ -408,6 +420,7 @@ export default function App() {
                           tickLine={false} 
                           tick={{ fill: '#64748b', fontSize: 12 }} 
                           dy={10}
+                          tickFormatter={(value) => (windowWidth < 768 && value.length > 4) ? value.substring(0, 4) : value}
                         />
                         <YAxis 
                           domain={[0, 100]} 
@@ -431,7 +444,7 @@ export default function App() {
                           barSize={40}
                         >
                           {unitChartData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.average >= 80 ? '#2563eb' : entry.average >= 50 ? '#60a5fa' : '#93c5fd'} />
+                            <Cell key={`cell-unit-${entry.unit}-${index}`} fill={entry.average >= 80 ? '#2563eb' : entry.average >= 50 ? '#60a5fa' : '#93c5fd'} />
                           ))}
                         </Bar>
                       </BarChart>
@@ -453,8 +466,10 @@ export default function App() {
                     </div>
                   </div>
                   <div className="chart-container">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={400}>
                       <BarChart 
+                        // @ts-ignore
+                        key={`item-chart-${itemChartData.map(d => d.item).join(',')}`}
                         data={itemChartData} 
                         layout="vertical" 
                         margin={{ top: 0, right: 20, left: -10, bottom: 0 }}
@@ -491,7 +506,7 @@ export default function App() {
                           barSize={20}
                         >
                           {itemChartData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.average >= 80 ? '#4f46e5' : entry.average >= 50 ? '#818cf8' : '#c7d2fe'} />
+                            <Cell key={`cell-item-${entry.item}-${index}`} fill={entry.average >= 80 ? '#4f46e5' : entry.average >= 50 ? '#818cf8' : '#c7d2fe'} />
                           ))}
                         </Bar>
                       </BarChart>
