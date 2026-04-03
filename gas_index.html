@@ -125,10 +125,20 @@
                         const progressData = Papa.parse(progressCsv, { header: false }).data;
                         const progressHeader = progressData[0] || [];
                         
-                        const labels = progressHeader.slice(2).filter(label => label);
-                        const keys = labels.map((_, i) => `item${i}`);
-                        setItemLabels(labels);
-                        setItemKeys(keys);
+                        // Items start from column 3 (index 2)
+                        const rawLabels = progressHeader.slice(2);
+                        const validLabels = [];
+                        const validKeys = [];
+                        
+                        rawLabels.forEach((label, i) => {
+                            if (label && label.trim()) {
+                                validLabels.push(label.trim());
+                                validKeys.push(`item${i}`); // item + original index from slice(2)
+                            }
+                        });
+                        
+                        setItemLabels(validLabels);
+                        setItemKeys(validKeys);
 
                         const parsedProgress = progressData.slice(1)
                             .filter(row => row[0])
@@ -137,9 +147,23 @@
                                     name: row[0],
                                     unit: row[1],
                                 };
-                                labels.forEach((_, i) => {
-                                    const val = row[i + 2];
-                                    data[`item${i}`] = val === "해당없음" ? "해당없음" : (Number(val) || 0);
+                                
+                                validKeys.forEach((key) => {
+                                    const originalIdx = parseInt(key.replace("item", ""));
+                                    const rawVal = (row[originalIdx + 2] || "").toString().trim();
+                                    
+                                    // Remove zero-width spaces and other invisible characters
+                                    const cleanVal = rawVal.replace(/[\u200B-\u200D\uFEFF]/g, "");
+                                    const noSpaceVal = cleanVal.replace(/\s/g, "");
+                                    
+                                    if (noSpaceVal === "해당없음" || cleanVal === "-") {
+                                        data[key] = "해당없음";
+                                    } else if (cleanVal === "") {
+                                        data[key] = 0;
+                                    } else {
+                                        const num = Number(cleanVal);
+                                        data[key] = isNaN(num) ? 0 : num;
+                                    }
                                 });
                                 return data;
                             });

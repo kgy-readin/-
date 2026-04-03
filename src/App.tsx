@@ -13,7 +13,7 @@ import {
   Lock, 
   User, 
   Calendar, 
-  ExternalLink, 
+  Link, 
   LogOut, 
   Loader2, 
   AlertCircle,
@@ -38,6 +38,7 @@ export default function App() {
   const [selectedStudent, setSelectedStudent] = useState<StudentInfo | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -55,7 +56,7 @@ export default function App() {
         setError(null);
 
         // Fetch Info Sheet
-        const infoUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("정보")}`;
+        const infoUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("정보")}&t=${Date.now()}`;
         const infoRes = await fetch(infoUrl);
         const infoCsv = await infoRes.text();
         
@@ -89,34 +90,72 @@ export default function App() {
             password: row[pwIdx !== -1 ? pwIdx : 5],
             masterPassword: row[masterPwIdx !== -1 ? masterPwIdx : -1],
             examName: examName
-          }));
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, "ko"));
         setStudents(parsedStudents);
 
         // Fetch Progress Sheet
-        const progressUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("진행률")}`;
+        const progressUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("진행률")}&t=${Date.now()}`;
         const progressRes = await fetch(progressUrl);
         const progressCsv = await progressRes.text();
         
         const progressData = Papa.parse<string[]>(progressCsv, { header: false }).data;
         const progressHeader = progressData[0] || [];
         
-        // Items start from column 3 (index 2)
-        const labels = progressHeader.slice(2).filter(label => label);
-        const keys = labels.map((_, i) => `item${i}`);
-        setItemLabels(labels);
-        setItemKeys(keys);
+        // Robust column mapping
+        const trimmedHeader = progressHeader.map(h => (h || "").toString().trim());
+        const nameColIdx = trimmedHeader.findIndex(h => h === "이름");
+        const unitColIdx = trimmedHeader.findIndex(h => h === "단원");
+        
+        if (nameColIdx === -1 || unitColIdx === -1) {
+          console.error("Required columns '이름' or '단원' not found. Header:", trimmedHeader);
+          setError("진행률 시트에서 '이름' 또는 '단원' 컬럼을 찾을 수 없습니다.");
+          return;
+        }
+
+        const items: { label: string; key: string; colIdx: number }[] = [];
+        trimmedHeader.forEach((label, i) => {
+          if (i !== nameColIdx && i !== unitColIdx && label !== "") {
+            items.push({
+              label: label,
+              key: `item${i}`,
+              colIdx: i
+            });
+          }
+        });
+        
+        setItemLabels(items.map(it => it.label));
+        setItemKeys(items.map(it => it.key));
 
         // Skip header row
         const parsedProgress: ProgressData[] = progressData.slice(1)
-          .filter(row => row[0])
-          .map(row => {
+          .filter(row => (row[nameColIdx] || "").toString().trim() !== "")
+          .map((row) => {
             const data: ProgressData = {
-              name: row[0],
-              unit: row[1],
+              name: row[nameColIdx].toString().trim(),
+              unit: row[unitColIdx].toString().trim(),
             };
-            labels.forEach((_, i) => {
-              const val = row[i + 2];
-              data[`item${i}`] = val === "해당없음" ? "해당없음" : (Number(val) || 0);
+            
+            items.forEach((item) => {
+              const cellValue = row[item.colIdx];
+              const rawVal = (cellValue === undefined || cellValue === null) ? "" : cellValue.toString().trim();
+              const cleanVal = rawVal.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+              
+              if (cleanVal === "") {
+                // Strictly empty cell -> Scheduled (예정)
+                data[item.key] = 0;
+              } else {
+                // Try numeric parsing (handle percentages)
+                const numericPart = cleanVal.replace(/%/g, "").trim();
+                
+                // If it's a valid number
+                if (numericPart !== "" && !isNaN(Number(numericPart)) && !/^[-‐‑‒–—―−]$/.test(cleanVal)) {
+                  data[item.key] = Number(numericPart);
+                } else {
+                  // Any text, dash, or non-numeric value -> Not Applicable (-)
+                  data[item.key] = "해당없음";
+                }
+              }
             });
             return data;
           });
@@ -140,8 +179,9 @@ export default function App() {
 
     if (inputPw === studentPw || (selectedStudent.masterPassword && inputPw === masterPw)) {
       setIsAuthenticated(true);
+      setLoginError(false);
     } else {
-      alert("비밀번호가 일치하지 않습니다.");
+      setLoginError(true);
     }
   };
 
@@ -157,7 +197,8 @@ export default function App() {
     return allProgress.filter(p => p.name === selectedStudent.name);
   }, [allProgress, selectedStudent]);
 
-  // Identify keys that are NOT "해당없음" for at least one unit for this student
+  // Identify keys that are NOT "해당없음" for at least one unit for THIS student
+  // If all units for the selected student are "해당없음" (-), the entire column/item is excluded.
   const validItemKeys = useMemo(() => {
     if (studentProgress.length === 0) return [];
     return itemKeys.filter(key => {
@@ -263,7 +304,9 @@ export default function App() {
                   <GraduationCap className="w-8 h-8 text-blue-600" />
                 </div>
                 <h1 className="text-2xl font-bold text-slate-900">내신 대비 학습 대시보드</h1>
-                <p className="text-slate-500 mt-2">내신 대비 학습 현황을 확인해 보세요</p>
+                <p className={`mt-2 ${loginError ? "text-red-500 font-semibold" : "text-slate-500"}`}>
+                  {loginError ? "비밀번호가 일치하지 않습니다" : "내신 대비 학습 현황을 확인해 보세요"}
+                </p>
               </div>
 
               <div className="space-y-6">
@@ -288,7 +331,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">등원번호</label>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">비밀번호</label>
                   <div className="relative">
                     <input 
                       type="password"
@@ -307,7 +350,7 @@ export default function App() {
                   disabled={!selectedStudent || !password}
                   className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-200"
                 >
-                  확인하기
+                  확인
                 </button>
               </div>
             </div>
@@ -340,7 +383,7 @@ export default function App() {
                     className="px-4 py-3 bg-blue-50 text-blue-600 rounded-2xl hover:bg-blue-100 transition-all shadow-sm border border-blue-100 flex items-center justify-center gap-2"
                     title="숙제 리포트 보기"
                   >
-                    <ExternalLink className="w-6 h-6" />
+                    <Link className="w-6 h-6" />
                     <span className="font-semibold text-sm">숙제 리포트</span>
                   </a>
                 )}
@@ -405,8 +448,8 @@ export default function App() {
                       <p className="text-sm text-slate-500">진행 정도</p>
                     </div>
                   </div>
-                  <div className="chart-container">
-                    <ResponsiveContainer width="100%" height="100%" minHeight={400}>
+                  <div className="h-[350px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
                       <BarChart 
                         // @ts-ignore
                         key={`unit-chart-${unitChartData.map(d => d.unit).join(',')}`}
@@ -420,7 +463,7 @@ export default function App() {
                           tickLine={false} 
                           tick={{ fill: '#64748b', fontSize: 12 }} 
                           dy={10}
-                          tickFormatter={(value) => (windowWidth < 768 && value.length > 4) ? value.substring(0, 4) : value}
+                          tickFormatter={(value) => value.length > 4 ? value.substring(0, 4) : value}
                         />
                         <YAxis 
                           domain={[0, 100]} 
@@ -430,7 +473,7 @@ export default function App() {
                         />
                         <Tooltip 
                           cursor={{ fill: '#f8fafc' }}
-                          formatter={(value: number) => [`${value}%`, "수행률"]}
+                          formatter={(value: number) => [`${value}%`, "진행률"]}
                           contentStyle={{ 
                             borderRadius: '16px', 
                             border: 'none', 
@@ -465,8 +508,8 @@ export default function App() {
                       <p className="text-sm text-slate-500">진행 정도</p>
                     </div>
                   </div>
-                  <div className="chart-container">
-                    <ResponsiveContainer width="100%" height="100%" minHeight={400}>
+                  <div className="h-[350px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
                       <BarChart 
                         // @ts-ignore
                         key={`item-chart-${itemChartData.map(d => d.item).join(',')}`}
@@ -492,7 +535,7 @@ export default function App() {
                         />
                         <Tooltip 
                           cursor={{ fill: '#f8fafc' }}
-                          formatter={(value: number) => [`${value}%`, "수행률"]}
+                          formatter={(value: number) => [`${value}%`, "진행률"]}
                           contentStyle={{ 
                             borderRadius: '16px', 
                             border: 'none', 
@@ -518,8 +561,9 @@ export default function App() {
 
             {/* Detail Table */}
             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-6 border-b border-slate-50">
+              <div className="p-6 border-b border-slate-50 flex justify-between items-center">
                 <h3 className="font-bold text-slate-900">단원별 한 눈에 보기</h3>
+                <span className="text-[10px] text-slate-300">v2026.04.03.09</span>
               </div>
               
               {/* Desktop Table */}
@@ -546,7 +590,7 @@ export default function App() {
                           const val = p[key];
                           if (val === "해당없음") {
                             return (
-                              <td key={key} className="p-4 text-center text-slate-300 font-medium">-</td>
+                              <td key={key} className="p-4 text-center text-slate-400 font-medium">-</td>
                             );
                           }
                           
@@ -599,7 +643,7 @@ export default function App() {
                             const val = p[key];
                             if (val === "해당없음") {
                               return (
-                                <td key={pIdx} className="p-4 text-center text-slate-300 font-medium">-</td>
+                                <td key={pIdx} className="p-4 text-center text-slate-400 font-medium">-</td>
                               );
                             }
 
@@ -632,7 +676,7 @@ export default function App() {
             </div>
 
             <footer className="text-center text-slate-400 text-sm py-8">
-              &copy; 2026 Academic Achievement Dashboard. All rights reserved.
+              &copy; 2026 리드인독서논술국어학원. All rights reserved.
             </footer>
           </motion.div>
         )}
