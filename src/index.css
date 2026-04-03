@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+.chart-container {
+    width: 100%;
+    min-height: 400px;
+    position: relative;
+    margin-bottom: 30px;
+}
+
+canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
