@@ -21,7 +21,8 @@ import {
   BookOpen,
   GraduationCap,
   CheckCircle,
-  Search
+  Search,
+  RefreshCcw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Papa from "papaparse";
@@ -43,6 +44,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
@@ -52,126 +54,134 @@ export default function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  const fetchData = async (isInitial = false) => {
+    try {
+      if (isInitial) setLoading(true);
+      else setIsRefreshing(true);
+      setError(null);
 
-        // Fetch Info Sheet
-        const infoUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("정보")}&t=${Date.now()}`;
-        const infoRes = await fetch(infoUrl);
-        const infoCsv = await infoRes.text();
-        
-        const infoData = Papa.parse<string[]>(infoCsv, { header: false }).data;
-        const headerRow = infoData[0] || [];
-        
-        // Find column indices
-        const nameIdx = headerRow.indexOf("이름");
-        const schoolIdx = headerRow.indexOf("학교");
-        const gradeIdx = headerRow.indexOf("학년");
-        const dateIdx = headerRow.findIndex(col => col.startsWith("날짜("));
-        const reportIdx = headerRow.indexOf("숙제 리포트 url");
-        const pwIdx = headerRow.indexOf("비밀번호");
-        const masterPwIdx = headerRow.indexOf("마스터 비밀번호");
+      // Fetch Info Sheet
+      const infoUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("정보")}&t=${Date.now()}`;
+      const infoRes = await fetch(infoUrl);
+      const infoCsv = await infoRes.text();
+      
+      const infoData = Papa.parse<string[]>(infoCsv, { header: false }).data;
+      const headerRow = infoData[0] || [];
+      
+      // Find column indices
+      const nameIdx = headerRow.indexOf("이름");
+      const schoolIdx = headerRow.indexOf("학교");
+      const gradeIdx = headerRow.indexOf("학년");
+      const dateIdx = headerRow.findIndex(col => col.startsWith("날짜("));
+      const reportIdx = headerRow.indexOf("숙제 리포트 url");
+      const pwIdx = headerRow.indexOf("비밀번호");
+      const masterPwIdx = headerRow.indexOf("마스터 비밀번호");
 
-        let examName = "시험";
-        if (dateIdx !== -1) {
-          const match = headerRow[dateIdx].match(/\((.*)\)/);
-          if (match) examName = match[1];
-        }
-
-        // Skip header row
-        const parsedStudents: StudentInfo[] = infoData.slice(1)
-          .filter(row => row[nameIdx !== -1 ? nameIdx : 0]) // Filter empty rows
-          .map(row => ({
-            name: row[nameIdx !== -1 ? nameIdx : 0],
-            school: row[schoolIdx !== -1 ? schoolIdx : 1],
-            grade: row[gradeIdx !== -1 ? gradeIdx : 2],
-            midtermDate: row[dateIdx !== -1 ? dateIdx : 3],
-            reportUrl: row[reportIdx !== -1 ? reportIdx : 4],
-            password: row[pwIdx !== -1 ? pwIdx : 5],
-            masterPassword: row[masterPwIdx !== -1 ? masterPwIdx : -1],
-            examName: examName
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-        setStudents(parsedStudents);
-
-        // Fetch Progress Sheet
-        const progressUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("진행률")}&t=${Date.now()}`;
-        const progressRes = await fetch(progressUrl);
-        const progressCsv = await progressRes.text();
-        
-        const progressData = Papa.parse<string[]>(progressCsv, { header: false }).data;
-        const progressHeader = progressData[0] || [];
-        
-        // Robust column mapping
-        const trimmedHeader = progressHeader.map(h => (h || "").toString().trim());
-        const nameColIdx = trimmedHeader.findIndex(h => h === "이름");
-        const unitColIdx = trimmedHeader.findIndex(h => h === "단원");
-        
-        if (nameColIdx === -1 || unitColIdx === -1) {
-          console.error("Required columns '이름' or '단원' not found. Header:", trimmedHeader);
-          setError("진행률 시트에서 '이름' 또는 '단원' 컬럼을 찾을 수 없습니다.");
-          return;
-        }
-
-        const items: { label: string; key: string; colIdx: number }[] = [];
-        trimmedHeader.forEach((label, i) => {
-          if (i !== nameColIdx && i !== unitColIdx && label !== "") {
-            items.push({
-              label: label,
-              key: `item${i}`,
-              colIdx: i
-            });
-          }
-        });
-        
-        setItemLabels(items.map(it => it.label));
-        setItemKeys(items.map(it => it.key));
-
-        // Skip header row
-        const parsedProgress: ProgressData[] = progressData.slice(1)
-          .filter(row => (row[nameColIdx] || "").toString().trim() !== "")
-          .map((row) => {
-            const data: ProgressData = {
-              name: row[nameColIdx].toString().trim(),
-              unit: row[unitColIdx].toString().trim(),
-            };
-            
-            items.forEach((item) => {
-              const cellValue = row[item.colIdx];
-              const rawVal = (cellValue === undefined || cellValue === null) ? "" : cellValue.toString().trim();
-              const cleanVal = rawVal.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
-              
-              if (cleanVal === "") {
-                // Strictly empty cell -> Scheduled (예정)
-                data[item.key] = 0;
-              } else {
-                // Try numeric parsing (handle percentages)
-                const numericPart = cleanVal.replace(/%/g, "").trim();
-                
-                // If it's a valid number
-                if (numericPart !== "" && !isNaN(Number(numericPart)) && !/^[-‐‑‒–—―−]$/.test(cleanVal)) {
-                  data[item.key] = Number(numericPart);
-                } else {
-                  // Any text, dash, or non-numeric value -> Not Applicable (-)
-                  data[item.key] = "해당없음";
-                }
-              }
-            });
-            return data;
-          });
-        setAllProgress(parsedProgress);
-      } catch (err) {
-        console.error("Data fetch error:", err);
-        setError("데이터를 불러오는 중 오류가 발생했습니다. 시트 설정을 확인해주세요.");
-      } finally {
-        setLoading(false);
+      let examName = "시험";
+      if (dateIdx !== -1) {
+        const match = headerRow[dateIdx].match(/\((.*)\)/);
+        if (match) examName = match[1];
       }
-    };
 
-    fetchData();
+      // Skip header row
+      const parsedStudents: StudentInfo[] = infoData.slice(1)
+        .filter(row => row[nameIdx !== -1 ? nameIdx : 0]) // Filter empty rows
+        .map(row => ({
+          name: row[nameIdx !== -1 ? nameIdx : 0],
+          school: row[schoolIdx !== -1 ? schoolIdx : 1],
+          grade: row[gradeIdx !== -1 ? gradeIdx : 2],
+          midtermDate: row[dateIdx !== -1 ? dateIdx : 3],
+          reportUrl: row[reportIdx !== -1 ? reportIdx : 4],
+          password: row[pwIdx !== -1 ? pwIdx : 5],
+          masterPassword: row[masterPwIdx !== -1 ? masterPwIdx : -1],
+          examName: examName
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+      setStudents(parsedStudents);
+
+      // Fetch Progress Sheet
+      const progressUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("진행률")}&t=${Date.now()}`;
+      const progressRes = await fetch(progressUrl);
+      const progressCsv = await progressRes.text();
+      
+      const progressData = Papa.parse<string[]>(progressCsv, { header: false }).data;
+      const progressHeader = progressData[0] || [];
+      
+      // Robust column mapping
+      const trimmedHeader = progressHeader.map(h => (h || "").toString().trim());
+      const nameColIdx = trimmedHeader.findIndex(h => h === "이름");
+      const unitColIdx = trimmedHeader.findIndex(h => h === "단원");
+      
+      if (nameColIdx === -1 || unitColIdx === -1) {
+        console.error("Required columns '이름' or '단원' not found. Header:", trimmedHeader);
+        setError("진행률 시트에서 '이름' 또는 '단원' 컬럼을 찾을 수 없습니다.");
+        return;
+      }
+
+      const items: { label: string; key: string; colIdx: number }[] = [];
+      trimmedHeader.forEach((label, i) => {
+        if (i !== nameColIdx && i !== unitColIdx && label !== "") {
+          items.push({
+            label: label,
+            key: `item${i}`,
+            colIdx: i
+          });
+        }
+      });
+      
+      setItemLabels(items.map(it => it.label));
+      setItemKeys(items.map(it => it.key));
+
+      // Skip header row
+      const parsedProgress: ProgressData[] = progressData.slice(1)
+        .filter(row => (row[nameColIdx] || "").toString().trim() !== "")
+        .map((row) => {
+          const data: ProgressData = {
+            name: row[nameColIdx].toString().trim(),
+            unit: row[unitColIdx].toString().trim(),
+          };
+          
+          items.forEach((item) => {
+            const cellValue = row[item.colIdx];
+            const rawVal = (cellValue === undefined || cellValue === null) ? "" : cellValue.toString().trim();
+            const cleanVal = rawVal.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+            
+            if (cleanVal === "") {
+              // Strictly empty cell -> Scheduled (예정)
+              data[item.key] = 0;
+            } else {
+              // Try numeric parsing (handle percentages)
+              const numericPart = cleanVal.replace(/%/g, "").trim();
+              
+              // If it's a valid number
+              if (numericPart !== "" && !isNaN(Number(numericPart)) && !/^[-‐‑‒–—―−]$/.test(cleanVal)) {
+                data[item.key] = Number(numericPart);
+              } else {
+                // Any text, dash, or non-numeric value -> Not Applicable (-)
+                data[item.key] = "해당없음";
+              }
+            }
+          });
+          return data;
+        });
+      setAllProgress(parsedProgress);
+
+      // Update selected student if already logged in to sync with latest data
+      if (selectedStudent) {
+        const updated = parsedStudents.find(s => s.name === selectedStudent.name);
+        if (updated) setSelectedStudent(updated);
+      }
+    } catch (err) {
+      console.error("Data fetch error:", err);
+      setError("데이터를 불러오는 중 오류가 발생했습니다. 시트 설정을 확인해주세요.");
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData(true);
   }, []);
 
   const handleLogin = () => {
@@ -414,6 +424,15 @@ export default function App() {
                 )}
 
                 <button 
+                  onClick={() => fetchData(false)}
+                  disabled={isRefreshing}
+                  className="p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-blue-50 hover:text-blue-600 transition-all flex items-center justify-center disabled:opacity-50"
+                  title="새로고침"
+                >
+                  <RefreshCcw className={`w-6 h-6 ${isRefreshing ? "animate-spin" : ""}`} />
+                </button>
+
+                <button 
                   onClick={handleLogout}
                   className="p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-red-50 hover:text-red-600 transition-all flex items-center justify-center"
                   title="로그아웃"
@@ -615,7 +634,7 @@ export default function App() {
                   </div>
                   <h3 className="font-bold text-slate-900">단원별 한 눈에 보기</h3>
                 </div>
-                <span className="text-[10px] text-slate-300">v2026.04.04.01</span>
+                <span className="text-[10px] text-slate-300">v2026.04.04.03</span>
               </div>
               
               {/* Desktop Table */}
