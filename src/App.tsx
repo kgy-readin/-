@@ -6,12 +6,12 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ResponsiveContainer, 
-  Cell 
+  ResponsiveContainer 
 } from "recharts";
 import { 
   Lock, 
   User, 
+  Users,
   Calendar, 
   Link, 
   LogOut, 
@@ -22,7 +22,9 @@ import {
   GraduationCap,
   CheckCircle,
   Search,
-  RefreshCcw
+  RefreshCcw,
+  Save,
+  RotateCcw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Papa from "papaparse";
@@ -32,6 +34,7 @@ import {
 } from "./types";
 
 const SPREADSHEET_ID = "1xIlvxq4h1riV2BucwMKjcE2wmqm64xir2r_KyFTdp94";
+const APP_VERSION = "Logos 2.4.1";
 
 export default function App() {
   const [students, setStudents] = useState<StudentInfo[]>([]);
@@ -40,6 +43,9 @@ export default function App() {
   const [itemKeys, setItemKeys] = useState<string[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<StudentInfo | null>(null);
   const [adminViewStudent, setAdminViewStudent] = useState<StudentInfo | null>(null);
+  const [selectedClassGroup, setSelectedClassGroup] = useState<string>("전체");
+  const [pendingEdits, setPendingEdits] = useState<Record<string, number>>({});
+  const [isSaving, setIsSaving] = useState(false);
   const [studentNameInput, setStudentNameInput] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
@@ -47,6 +53,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
   useEffect(() => {
@@ -54,6 +61,13 @@ export default function App() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const fetchData = async (isInitial = false) => {
     try {
@@ -78,6 +92,7 @@ export default function App() {
       const reportIdx = trimmedHeaderRow.indexOf("숙제 리포트 url");
       const pwIdx = trimmedHeaderRow.indexOf("비밀번호");
       const masterPwIdx = trimmedHeaderRow.indexOf("마스터 비밀번호");
+      const classIdx = trimmedHeaderRow.indexOf("소속");
 
       let examName = "시험";
       if (dateIdx !== -1) {
@@ -96,7 +111,8 @@ export default function App() {
           reportUrl: row[reportIdx !== -1 ? reportIdx : 4],
           password: (row[pwIdx !== -1 ? pwIdx : 5] || "").toString().trim(),
           masterPassword: (masterPwIdx !== -1 ? (row[masterPwIdx] || "") : "").toString().trim(),
-          examName: examName
+          examName: examName,
+          classGroup: classIdx !== -1 ? (row[classIdx] || "").toString().trim() : ""
         }))
         .sort((a, b) => a.name.localeCompare(b.name, "ko"));
       setStudents(parsedStudents);
@@ -115,7 +131,6 @@ export default function App() {
       const unitColIdx = trimmedHeader.findIndex(h => h === "단원");
       
       if (nameColIdx === -1 || unitColIdx === -1) {
-        console.error("Required columns '이름' or '단원' not found. Header:", trimmedHeader);
         setError("진행률 시트에서 '이름' 또는 '단원' 컬럼을 찾을 수 없습니다.");
         return;
       }
@@ -181,7 +196,6 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error("Data fetch error:", err);
       setError("데이터를 불러오는 중 오류가 발생했습니다. 시트 설정을 확인해주세요.");
     } finally {
       setLoading(false);
@@ -224,10 +238,74 @@ export default function App() {
     setSelectedStudent(null);
     setAdminViewStudent(null);
     setStudentNameInput("");
+    setPendingEdits({});
+  };
+
+  const handleEditChange = (unitName: string, itemKey: string, value: string) => {
+    const numValue = Math.min(100, Math.max(0, parseInt(value) || 0));
+    const editKey = `${adminViewStudent?.name}|${unitName}|${itemKey}`;
+    setPendingEdits(prev => ({
+      ...prev,
+      [editKey]: numValue
+    }));
+  };
+
+  const handleSaveEdits = async () => {
+    if (Object.keys(pendingEdits).length === 0) return;
+    
+    setIsSaving(true);
+    try {
+      const updates = Object.entries(pendingEdits).map(([key, value]) => {
+        const [studentName, unitName, itemKey] = key.split("|");
+        
+        const keyIndex = itemKeys.indexOf(itemKey);
+        const actualLabel = itemLabels[keyIndex]; 
+
+        return { 
+          studentName: studentName.trim(), 
+          unitName: unitName.trim(), 
+          itemKey: actualLabel.trim(),
+          value: String(value) 
+        };
+      });
+
+      const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzLa0dc9V6ZyS9OGrVTdybUsGCDtZbEwfkpmGFLBlK79rBzNzFnuqVeBRX1A4YvNtGIyQ/exec"; 
+      
+      const response = await fetch(GAS_WEBAPP_URL, {
+        method: 'POST',
+        body: JSON.stringify({ updates }),
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      });
+      
+      const result = await response.json();
+      
+      if (result.status === "ok") {
+        setToast({ message: "저장이 완료되었습니다.", type: "success" });
+        setPendingEdits({});
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await fetchData(); 
+      } else {
+        throw new Error(result.message);
+      }
+    } catch (err) {
+      setToast({ message: "저장 실패: " + (err instanceof Error ? err.message : String(err)), type: "error" });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const isAdmin = selectedStudent?.name === "관리자";
   const currentViewStudent = isAdmin ? adminViewStudent : selectedStudent;
+
+  const classGroups = useMemo(() => {
+    const groups = new Set<string>();
+    students.forEach(s => {
+      if (s.name !== "관리자" && s.classGroup) {
+        groups.add(s.classGroup);
+      }
+    });
+    return ["전체", ...Array.from(groups).sort()];
+  }, [students]);
 
   // Filter progress for the authenticated student (or selected student for admin)
   const studentProgress = useMemo(() => {
@@ -362,7 +440,7 @@ export default function App() {
                 <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <GraduationCap className="w-8 h-8 text-blue-600" />
                 </div>
-                <h1 className="text-2xl font-bold text-slate-900">내신 대비 학습 대시보드</h1>
+                <h1 className="text-[24px] md:text-[24px] font-bold text-slate-900">리드인 내신 대비 대시보드</h1>
                 <p className={`mt-2 ${loginError ? "text-red-500 font-semibold" : "text-slate-500"}`}>
                   {loginError ? "비밀번호가 일치하지 않습니다" : "내신 대비 학습 현황을 확인해 보세요"}
                 </p>
@@ -388,7 +466,7 @@ export default function App() {
                   <div className="relative">
                     <input 
                       type="password"
-                      placeholder="등원번호를 입력해 주세요"
+                      placeholder="등원 번호를 입력해 주세요"
                       className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -424,31 +502,53 @@ export default function App() {
                     {isAdmin ? "리드인 내신 대비 학습" : `${currentViewStudent?.school} ${currentViewStudent?.grade}`}
                   </span>
                 </div>
-                <h1 className="text-2xl md:text-3xl font-bold text-slate-900">
-                  {isAdmin ? "학생별 대시보드" : `${currentViewStudent?.name} 학생 내신 대비`}
+                <h1 className="text-[24px] md:text-[28px] font-bold text-slate-900">
+                  {isAdmin ? "학생별 대시보드 관리" : `${currentViewStudent?.name} 학생 내신 대비`}
                 </h1>
               </div>
 
               <div className="flex items-center gap-3">
                 {isAdmin ? (
-                  <div className="relative">
-                    <select 
-                      className="pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-sm text-slate-700"
-                      onChange={(e) => {
-                        const student = students.find(s => s.name === e.target.value);
-                        setAdminViewStudent(student || null);
-                      }}
-                      value={adminViewStudent?.name || ""}
-                    >
-                      <option value="">학생 선택</option>
-                      {students
-                        .filter(s => s.name !== "관리자")
-                        .map(s => (
-                          <option key={s.name} value={s.name}>{s.name}</option>
-                        ))
-                      }
-                    </select>
-                    <User className="absolute left-3 top-3.5 w-5 h-5 text-slate-400" />
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <select 
+                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[33px] pr-[14px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-10 sm:pr-4 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
+                        onChange={(e) => {
+                          setSelectedClassGroup(e.target.value);
+                          // Reset student if they are not in the new class
+                          if (e.target.value !== "전체" && adminViewStudent && adminViewStudent.classGroup !== e.target.value) {
+                            setAdminViewStudent(null);
+                          }
+                        }}
+                        value={selectedClassGroup}
+                      >
+                        {classGroups.map(group => (
+                          <option key={group} value={group}>{group}</option>
+                        ))}
+                      </select>
+                      <Users className="absolute left-3 top-[13px] sm:top-3.5 w-[15px] h-[15px] sm:w-[18px] sm:h-[18px] text-slate-400" />
+                    </div>
+
+                    <div className="relative">
+                      <select 
+                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[33px] pr-[14px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-10 sm:pr-4 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
+                        onChange={(e) => {
+                          const student = students.find(s => s.name === e.target.value);
+                          setAdminViewStudent(student || null);
+                        }}
+                        value={adminViewStudent?.name || ""}
+                      >
+                        <option value="">선택</option>
+                        {students
+                          .filter(s => s.name !== "관리자")
+                          .filter(s => selectedClassGroup === "전체" || s.classGroup === selectedClassGroup)
+                          .map(s => (
+                            <option key={s.name} value={s.name}>{s.name}</option>
+                          ))
+                        }
+                      </select>
+                      <User className="absolute left-3 top-[13px] sm:top-3.5 w-[15px] h-[15px] sm:w-[18px] sm:h-[18px] text-slate-400" />
+                    </div>
                   </div>
                 ) : (
                   currentViewStudent?.reportUrl && (
@@ -468,39 +568,39 @@ export default function App() {
                 <button 
                   onClick={() => fetchData(false)}
                   disabled={isRefreshing}
-                  className="p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-blue-50 hover:text-blue-600 transition-all flex items-center justify-center disabled:opacity-50"
+                  className="w-10 h-10 pl-0 sm:w-auto sm:h-auto sm:p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-blue-50 hover:text-blue-600 transition-all flex items-center justify-center disabled:opacity-50"
                   title="새로고침"
                 >
-                  <RefreshCcw className={`w-6 h-6 ${isRefreshing ? "animate-spin" : ""}`} />
+                  <RefreshCcw className={`w-[18px] h-[18px] sm:w-6 sm:h-6 ${isRefreshing ? "animate-spin" : ""}`} />
                 </button>
 
                 <button 
                   onClick={handleLogout}
-                  className="p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-red-50 hover:text-red-600 transition-all flex items-center justify-center"
+                  className="w-10 h-10 sm:w-auto sm:h-auto sm:p-3 bg-slate-100 text-slate-600 rounded-2xl hover:bg-red-50 hover:text-red-600 transition-all flex items-center justify-center"
                   title="로그아웃"
                 >
-                  <LogOut className="w-6 h-6" />
+                  <LogOut className="w-[18px] h-[18px] sm:w-6 sm:h-6" />
                 </button>
               </div>
             </header>
 
             {/* Stats & Charts Grid (Only show if a student is selected or it's a regular student) */}
-            {(currentViewStudent && currentViewStudent.name !== "리드인내신") ? (
+            {currentViewStudent ? (
               <>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                   {/* 1. D-Day Block */}
                   <div className="order-1">
-                    <div className="bg-blue-50 p-6 rounded-3xl shadow-sm border border-blue-100 flex items-center justify-between h-full">
+                    <div className="bg-blue-50 p-6 rounded-3xl shadow-sm border border-blue-100 flex items-center justify-between h-[100px]">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shrink-0">
+                        <div className="w-[46px] h-[46px] bg-blue-600 rounded-2xl flex items-center justify-center text-white shrink-0">
                           <Calendar className="w-6 h-6" />
                         </div>
                         <div>
-                          <p className="text-blue-600 font-medium text-sm md:text-base">지필평가 D-Day</p>
-                          <h3 className="text-lg md:text-2xl font-bold text-slate-900">{currentViewStudent?.examName || "시험"}까지</h3>
+                          <p className="text-blue-600 font-medium text-[15px]">지필평가 D-Day</p>
+                          <h3 className="text-[21px] md:text-[23px] font-bold text-slate-900 leading-tight">{currentViewStudent?.examName || "시험"}까지</h3>
                         </div>
                       </div>
-                      <div className="text-2xl md:text-4xl font-black text-blue-600">
+                      <div className="text-[28px] md:text-[32px] font-black text-blue-600 tracking-tighter">
                         {dDay !== null ? (dDay > 0 ? `D-${dDay}` : dDay === 0 ? "D-Day" : `D+${Math.abs(dDay)}`) : "-"}
                       </div>
                     </div>
@@ -508,17 +608,17 @@ export default function App() {
 
               {/* 2. Total Progress Block */}
               <div className="order-2">
-                <div className="bg-indigo-50 p-6 rounded-3xl shadow-sm border border-indigo-100 flex items-center justify-between h-full">
+                <div className="bg-indigo-50 p-6 rounded-3xl shadow-sm border border-indigo-100 flex items-center justify-between h-[100px]">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shrink-0">
+                    <div className="w-[46px] h-[46px] bg-indigo-600 rounded-2xl flex items-center justify-center text-white shrink-0">
                       <TrendingUp className="w-6 h-6" />
                     </div>
                     <div>
-                      <p className="text-indigo-600 font-medium text-sm md:text-base">전체 진행률</p>
-                      <h3 className="text-lg md:text-2xl font-bold text-slate-900">학습 완성도</h3>
+                      <p className="text-indigo-600 font-medium text-[15px]">전체 진행률</p>
+                      <h3 className="text-[21px] md:text-[23px] font-bold text-slate-900 leading-tight">학습 완성도</h3>
                     </div>
                   </div>
-                  <div className="text-2xl md:text-4xl font-black text-indigo-600">
+                  <div className="text-[28px] md:text-[32px] font-black text-indigo-600 tracking-tighter">
                     {totalProgress}%
                   </div>
                 </div>
@@ -531,66 +631,84 @@ export default function App() {
                     <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
                       <BookOpen className="w-5 h-5 text-blue-600" />
                     </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-slate-900">단원별 진행률</h2>
-                      <p className="text-sm text-slate-500">진행 정도</p>
-                    </div>
+                    <h2 className="text-[18px] font-bold text-slate-900">
+                      {isAdmin && currentViewStudent && <span className="text-blue-600 mr-1">{currentViewStudent.name}</span>}
+                      단원별 진행률
+                    </h2>
                   </div>
                   <div className="h-[350px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart 
-                        // @ts-ignore
-                        key={`unit-chart-${unitChartData.map(d => d.unit).join(',')}`}
-                        data={unitChartData} 
-                        margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis 
-                          dataKey="unit" 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fill: '#64748b', fontSize: 12 }} 
-                          dy={10}
-                          tickFormatter={(value) => value.length > 4 ? value.substring(0, 4) : value}
-                        />
-                        <YAxis 
-                          domain={[0, 100]} 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fill: '#64748b', fontSize: 12 }} 
-                        />
-                        <Tooltip 
-                          cursor={{ fill: '#f8fafc' }}
-                          content={({ active, payload }) => {
-                            if (active && payload && payload.length) {
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 max-w-[200px]">
-                                  <p className="font-bold text-slate-900 mb-1">{data.unit}</p>
-                                  <p className="text-blue-600 font-bold text-lg mb-2">진행률: {data.average}%</p>
-                                  <div className="pt-2 border-t border-slate-50">
-                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">완료 항목</p>
-                                    <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                                      {data.completedList}
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
-                        <Bar 
-                          dataKey="average" 
-                          radius={[6, 6, 0, 0]} 
-                          barSize={40}
+                    {!loading && unitChartData.length > 0 && (
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                        <BarChart 
+                          // @ts-ignore
+                          key={`unit-chart-${unitChartData.map(d => d.unit).join(',')}`}
+                          data={unitChartData} 
+                          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
                         >
-                          {unitChartData.map((entry, index) => (
-                            <Cell key={`cell-unit-${entry.unit}-${index}`} fill={entry.average >= 80 ? '#2563eb' : entry.average >= 50 ? '#60a5fa' : '#93c5fd'} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                          <XAxis 
+                            dataKey="unit" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: '#64748b', fontSize: 12 }} 
+                            dy={10}
+                            tickFormatter={(value) => value.length > 4 ? value.substring(0, 4) : value}
+                          />
+                          <YAxis 
+                            domain={[0, 100]} 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: '#64748b', fontSize: 12 }} 
+                          />
+                          <Tooltip 
+                            cursor={{ fill: '#f8fafc' }}
+                            content={({ active, payload }) => {
+                              if (active && payload && payload.length) {
+                                const data = payload[0].payload;
+                                return (
+                                  <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 max-w-[280px]">
+                                    <p className="font-bold text-slate-900 mb-1">{data.unit}</p>
+                                    <p className="text-blue-600 font-bold text-lg mb-2">진행률: {data.average}%</p>
+                                    <div className="pt-2 border-t border-slate-50">
+                                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">완료 항목</p>
+                                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                                        {data.completedList}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                          <Bar 
+                            dataKey="average" 
+                            barSize={40}
+                            // Use a custom shape to avoid deprecated Cell component
+                            shape={(props: any) => {
+                              let { x, y, width, height, average } = props;
+                              const fill = average >= 80 ? '#2563eb' : average >= 50 ? '#60a5fa' : '#93c5fd';
+                              
+                              // Handle 0% data: ensure minimum height of 5px
+                              if (height < 5) {
+                                y = y - (5 - height);
+                                height = 5;
+                              }
+                              
+                              const radius = Math.min(6, height);
+                              
+                              // Round top corners
+                              return (
+                                <path 
+                                  d={`M${x},${y + radius} Q${x},${y} ${x + radius},${y} L${x + width - radius},${y} Q${x + width},${y} ${x + width},${y + radius} L${x + width},${y + height} L${x},${y + height} Z`} 
+                                  fill={fill} 
+                                />
+                              );
+                            }}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </div>
                 </div>
               </div>
@@ -602,68 +720,85 @@ export default function App() {
                     <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
                       <CheckCircle className="w-5 h-5 text-indigo-600" />
                     </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-slate-900">항목별 진행률</h2>
-                      <p className="text-sm text-slate-500">진행 정도</p>
-                    </div>
+                    <h2 className="text-[18px] font-bold text-slate-900">
+                      {isAdmin && currentViewStudent && <span className="text-indigo-600 mr-1">{currentViewStudent.name}</span>}
+                      항목별 진행률
+                    </h2>
                   </div>
                   <div className="h-[350px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart 
-                        // @ts-ignore
-                        key={`item-chart-${itemChartData.map(d => d.item).join(',')}`}
-                        data={itemChartData} 
-                        layout="vertical" 
-                        margin={{ top: 0, right: 20, left: -10, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                        <XAxis 
-                          type="number" 
-                          domain={[0, 100]} 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fill: '#64748b', fontSize: 12 }} 
-                        />
-                        <YAxis 
-                          dataKey="item" 
-                          type="category" 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fill: '#475569', fontSize: 10, fontWeight: 500 }} 
-                          width={70}
-                        />
-                        <Tooltip 
-                          cursor={{ fill: '#f8fafc' }}
-                          content={({ active, payload }) => {
-                            if (active && payload && payload.length) {
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 max-w-[200px]">
-                                  <p className="font-bold text-slate-900 mb-1">{data.item}</p>
-                                  <p className="text-indigo-600 font-bold text-lg mb-2">진행률: {data.average}%</p>
-                                  <div className="pt-2 border-t border-slate-50">
-                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">완료 단원</p>
-                                    <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                                      {data.completedList}
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
-                        <Bar 
-                          dataKey="average" 
-                          radius={[0, 6, 6, 0]} 
-                          barSize={20}
+                    {!loading && itemChartData.length > 0 && (
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                        <BarChart 
+                          // @ts-ignore
+                          key={`item-chart-${itemChartData.map(d => d.item).join(',')}`}
+                          data={itemChartData} 
+                          layout="vertical" 
+                          margin={{ top: 0, right: 20, left: -10, bottom: 0 }}
                         >
-                          {itemChartData.map((entry, index) => (
-                            <Cell key={`cell-item-${entry.item}-${index}`} fill={entry.average >= 80 ? '#4f46e5' : entry.average >= 50 ? '#818cf8' : '#c7d2fe'} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                          <XAxis 
+                            type="number" 
+                            domain={[0, 100]} 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: '#64748b', fontSize: 12 }} 
+                          />
+                          <YAxis 
+                            dataKey="item" 
+                            type="category" 
+                            axisLine={false} 
+                            tickLine={false} 
+                            tick={{ fill: '#475569', fontSize: 11, fontWeight: 500 }} 
+                            width={70}
+                          />
+                          <Tooltip 
+                            cursor={{ fill: '#f8fafc' }}
+                            content={({ active, payload }) => {
+                              if (active && payload && payload.length) {
+                                const data = payload[0].payload;
+                                return (
+                                  <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 max-w-[280px]">
+                                    <p className="font-bold text-slate-900 mb-1">{data.item}</p>
+                                    <p className="text-indigo-600 font-bold text-lg mb-2">진행률: {data.average}%</p>
+                                    <div className="pt-2 border-t border-slate-50">
+                                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">완료 단원</p>
+                                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                                        {data.completedList}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                          <Bar 
+                            dataKey="average" 
+                            barSize={20}
+                            // Use a custom shape to avoid deprecated Cell component
+                            shape={(props: any) => {
+                              let { x, y, width, height, average } = props;
+                              const fill = average >= 80 ? '#4f46e5' : average >= 50 ? '#818cf8' : '#c7d2fe';
+                              
+                              // Handle 0% data: ensure minimum width of 5px
+                              if (width < 5) {
+                                width = 5;
+                              }
+                              
+                              const radius = Math.min(6, width);
+                              
+                              // Round right corners
+                              return (
+                                <path 
+                                  d={`M${x},${y} L${x + width - radius},${y} Q${x + width},${y} ${x + width},${y + radius} L${x + width},${y + height - radius} Q${x + width},${y + height} ${x + width - radius},${y + height} L${x},${y + height} Z`} 
+                                  fill={fill} 
+                                />
+                              );
+                            }}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </div>
                 </div>
               </div>
@@ -676,9 +811,31 @@ export default function App() {
                   <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center">
                     <Search className="w-5 h-5 text-slate-600" />
                   </div>
-                  <h3 className="font-bold text-slate-900">단원별 한 눈에 보기</h3>
+                  <h3 className="text-[18px] font-bold text-slate-900">
+                    {isAdmin && currentViewStudent && <span className="text-blue-600 mr-1">{currentViewStudent.name}</span>}
+                    단원별 한 눈에 보기
+                  </h3>
                 </div>
-                <span className="text-[10px] text-slate-300">v2026.04.04.09</span>
+                {isAdmin && Object.keys(pendingEdits).length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPendingEdits({})}
+                      disabled={isSaving}
+                      className="p-1.5 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-all disabled:opacity-50"
+                      title="수정 취소"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleSaveEdits}
+                      disabled={isSaving}
+                      className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100 flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {isSaving ? <RefreshCcw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      <span>저장 ({Object.keys(pendingEdits).length})</span>
+                    </button>
+                  </div>
+                )}
               </div>
               
               {/* Desktop Table */}
@@ -700,9 +857,35 @@ export default function App() {
                   <tbody className="divide-y divide-slate-50">
                     {studentProgress.map((p, idx) => (
                       <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 font-semibold text-slate-700 whitespace-nowrap">{p.unit}</td>
+                        <td className="p-4 font-semibold text-slate-700 whitespace-nowrap text-[14px]">{p.unit}</td>
                         {validItemKeys.map(key => {
                           const val = p[key];
+                          const editKey = `${adminViewStudent?.name}|${p.unit}|${key}`;
+                          const isEdited = pendingEdits[editKey] !== undefined;
+                          const displayVal = isEdited ? pendingEdits[editKey] : val;
+
+                          if (isAdmin && adminViewStudent) {
+                            return (
+                              <td key={key} className="p-4 text-center">
+                                <input
+                                  type="number"
+                                  value={displayVal === "해당없음" ? "" : displayVal}
+                                  onChange={(e) => handleEditChange(p.unit, key, e.target.value)}
+                                  placeholder="-"
+                                  className={`w-16 px-2 py-1 text-center text-sm font-bold rounded-lg border transition-all focus:ring-2 focus:ring-indigo-200 outline-none ${
+                                    isEdited 
+                                      ? "bg-indigo-50 border-indigo-200 text-indigo-700" 
+                                      : val === 100
+                                        ? "bg-green-50 border-green-200 text-green-700"
+                                        : typeof val === "number" && val > 0
+                                          ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                                          : "bg-slate-50 border-transparent text-slate-600 hover:border-slate-200"
+                                  }`}
+                                />
+                              </td>
+                            );
+                          }
+
                           if (val === "해당없음") {
                             return (
                               <td key={key} className="p-4 text-center text-slate-400 font-medium">-</td>
@@ -742,7 +925,7 @@ export default function App() {
                     <tr className="bg-slate-50">
                       <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider sticky left-0 bg-slate-50 z-10">항목</th>
                       {studentProgress.map((p, idx) => (
-                        <th key={idx} className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center whitespace-nowrap">
+                        <th key={idx} className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center whitespace-nowrap w-[76px] min-w-[76px]">
                           {p.unit.length > 4 ? p.unit.substring(0, 4) : p.unit}
                         </th>
                       ))}
@@ -758,9 +941,34 @@ export default function App() {
                           </td>
                           {studentProgress.map((p, pIdx) => {
                             const val = p[key];
+                            const editKey = `${adminViewStudent?.name}|${p.unit}|${key}`;
+                            const isEdited = pendingEdits[editKey] !== undefined;
+                            const displayVal = isEdited ? pendingEdits[editKey] : val;
+
+                            if (isAdmin && adminViewStudent) {
+                              return (
+                                <td key={pIdx} className="p-4 text-center w-[76px] min-w-[76px]">
+                                  <input
+                                    type="number"
+                                    value={displayVal === "해당없음" ? "" : displayVal}
+                                    onChange={(e) => handleEditChange(p.unit, key, e.target.value)}
+                                    className={`w-12 px-1 py-1 text-center text-[10px] font-bold rounded-lg border transition-all outline-none ${
+                                      isEdited 
+                                        ? "bg-indigo-50 border-indigo-200 text-indigo-700" 
+                                        : val === 100
+                                          ? "bg-green-50 border-green-200 text-green-700"
+                                          : typeof val === "number" && val > 0
+                                            ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                                            : "bg-slate-50 border-transparent text-slate-600"
+                                    }`}
+                                  />
+                                </td>
+                              );
+                            }
+
                             if (val === "해당없음") {
                               return (
-                                <td key={pIdx} className="p-4 text-center text-slate-400 font-medium">-</td>
+                                <td key={pIdx} className="p-4 text-center text-slate-400 font-medium w-[76px] min-w-[76px]">-</td>
                               );
                             }
 
@@ -777,7 +985,7 @@ export default function App() {
                             }
 
                             return (
-                              <td key={pIdx} className="p-4 text-center">
+                              <td key={pIdx} className="p-4 text-center w-[76px] min-w-[76px]">
                                 <span className={`inline-block px-3 py-1 rounded-lg text-[10px] font-bold ${colorClass}`}>
                                   {label}
                                 </span>
@@ -802,9 +1010,37 @@ export default function App() {
           </div>
         )}
 
-        <footer className="text-center text-slate-400 text-sm py-8">
-              &copy; 2026 리드인독서논술국어학원. All rights reserved.
-            </footer>
+        <footer className="flex flex-col md:flex-row justify-between items-center gap-2 text-slate-400 text-xs py-8 px-4">
+          <span className="order-2 md:order-1">&copy; 2026 리드인독서논술국어학원. All rights reserved.</span>
+          <span className="order-1 md:order-2">{APP_VERSION}</span>
+        </footer>
+
+        {/* Toast Notification */}
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, x: "-50%", y: "-50%" }}
+              animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
+              exit={{ opacity: 0, scale: 0.9, x: "-50%", y: "-50%" }}
+              className={`fixed top-1/2 left-1/2 z-50 px-8 py-4 rounded-3xl shadow-2xl flex flex-col items-center justify-center gap-4 min-w-[300px] border text-center ${
+                toast.type === "success" 
+                  ? "bg-white/95 backdrop-blur-sm text-emerald-600 border-emerald-100" 
+                  : "bg-white/95 backdrop-blur-sm text-red-600 border-red-100"
+              }`}
+            >
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center ${
+                toast.type === "success" ? "bg-emerald-50" : "bg-red-50"
+              }`}>
+                {toast.type === "success" ? (
+                  <CheckCircle className="w-10 h-10" />
+                ) : (
+                  <AlertCircle className="w-10 h-10" />
+                )}
+              </div>
+              <span className="text-lg font-bold">{toast.message}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
