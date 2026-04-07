@@ -512,7 +512,7 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <div className="relative">
                       <select 
-                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[33px] pr-[10px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-10 sm:pr-3 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
+                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[31px] pr-[10px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-[38px] sm:pr-3 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
                         onChange={(e) => {
                           setSelectedClassGroup(e.target.value);
                           // Reset student if they are not in the new class
@@ -531,7 +531,7 @@ export default function App() {
 
                     <div className="relative">
                       <select 
-                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[33px] pr-[10px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-10 sm:pr-3 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
+                        className="w-[85px] h-10 pt-[10px] pb-[10px] pl-[31px] pr-[10px] text-[13px] sm:w-[95px] sm:h-auto sm:pl-[38px] sm:pr-3 sm:py-3 sm:text-sm bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none appearance-none transition-all font-semibold text-slate-700"
                         onChange={(e) => {
                           const student = students.find(s => s.name === e.target.value);
                           setAdminViewStudent(student || null);
