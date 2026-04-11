@@ -9,6 +9,8 @@ export interface StudentInfo {
   examName?: string;
   classGroup?: string;
   timetable?: string;
+  notice?: string;
+  noticeHidden?: boolean;
 }
 
 export interface ProgressData {
