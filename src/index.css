@@ -10,6 +10,12 @@
     font-weight: 600;
     font-display: swap;
 }
+@font-face {
+    font-family: 'Suit';
+    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_suit@1.0/SUIT-Bold.woff2') format('woff2');
+    font-weight: 700;
+    font-display: swap;
+}
 
 @font-face {
     font-family: 'Paperozi';
@@ -39,8 +45,8 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Pretendard", ui-sans-serif, system-ui, sans-serif;
-  --font-pretendard: "Pretendard", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Suit", ui-sans-serif, system-ui, sans-serif;
+  --font-suit: "Suit", ui-sans-serif, system-ui, sans-serif;
   --font-paperlogy: "Paperozi", sans-serif;
 }
 
@@ -49,7 +55,7 @@ html {
 }
 
 body {
-  font-family: "Pretendard", sans-serif;
+  font-family: "Suit", sans-serif;
 }
 
 .chart-container {
